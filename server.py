@@ -10,7 +10,7 @@ RUN:
 NOTES:
     - Downloads Real-ESRGAN engine on first run (~50 MB)
     - Works on Windows, macOS, and Linux
-    - Serves the frontend at http://localhost:5000/ui  (no CORS issues)
+    - Serves the frontend at http://localhost:5000/  (no CORS issues)
 """
 
 import os
@@ -40,7 +40,15 @@ API_KEY           = "pixelforge-secret-2024"
 HOST              = "0.0.0.0"
 PORT              = 5000
 MAX_KB_HARD_LIMIT = 10000
+MAX_OUTPUT_KB     = 2048   # 2 MB hard ceiling
+OUTPUT_SIZE_MULT  = 7      # ~7× input size (5 KB → ~35 KB, 10 KB → ~70 KB, …)
 PROCESS_TIMEOUT   = 3600   # 60 minutes
+
+
+def smart_max_kb(input_bytes: int) -> int:
+    """Scale output cap with input size; never above MAX_OUTPUT_KB."""
+    input_kb = max(1, (input_bytes + 1023) // 1024)
+    return min(MAX_OUTPUT_KB, input_kb * OUTPUT_SIZE_MULT)
 # ═══════════════════════════════════════════════════════════════
 
 ALLOWED_MODELS = {
@@ -78,8 +86,10 @@ SUPPORTED = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".tif"}
 VERSION   = "1.1.0"
 
 # ── Engine state ─────────────────────────────────────────────────
-ENGINE_PATH  = None
-ENGINE_READY = threading.Event()   # set when engine is confirmed available
+ENGINE_PATH   = None
+ENGINE_READY  = threading.Event()   # set when engine is confirmed available
+ACTIVE_PROC   = None
+ACTIVE_LOCK   = threading.Lock()
 
 
 # ─── PLATFORM DETECTION ──────────────────────────────────────────
@@ -205,35 +215,73 @@ def _cleanup(*paths):
 
 # ─── ROUTES ──────────────────────────────────────────────────────
 
-@app.route("/", methods=["GET"])
-def index():
-    return jsonify({
-        "name":    "PixelForge AI API",
-        "version": VERSION,
-        "status":  "running",
-        "engine":  ENGINE_PATH is not None,
-        "ui":      f"http://localhost:{PORT}/ui",
-    })
+_UI_CANDIDATES = [
+    BASE_DIR / "pixelforge_frontend.html",
+    BASE_DIR / "frountend_fixed.html",
+    BASE_DIR / "frontend.html",
+    BASE_DIR / "new dfile.html",
+]
 
 
-@app.route("/ui", methods=["GET"])
-def serve_ui():
-    """Serve the frontend HTML from the same directory — no CORS issues."""
-    # Look for the HTML file next to server.py
-    candidates = [
-        BASE_DIR / "pixelforge_frontend.html",
-        BASE_DIR / "frountend_fixed.html",
-        BASE_DIR / "frontend.html",
-        BASE_DIR / "new dfile.html",
-    ]
-    for p in candidates:
+def _ui_html_path():
+    for p in _UI_CANDIDATES:
         if p.exists():
-            return send_file(str(p))
+            return p
+    return None
+
+
+def _serve_ui():
+    """Serve the frontend HTML from the same directory — no CORS issues."""
+    path = _ui_html_path()
+    if path:
+        return send_file(str(path))
     return (
         "<h2>Frontend file not found.</h2>"
         "<p>Place <code>pixelforge_frontend.html</code> next to <code>server.py</code>.</p>",
         404,
     )
+
+
+@app.route("/", methods=["GET"])
+def index():
+    return _serve_ui()
+
+
+@app.route("/ui", methods=["GET"])
+def serve_ui_legacy():
+    """Backward-compatible alias — same app as /."""
+    return _serve_ui()
+
+
+@app.route("/api", methods=["GET"])
+def api_info():
+    return jsonify({
+        "name":    "PixelForge AI API",
+        "version": VERSION,
+        "status":  "running",
+        "engine":  ENGINE_PATH is not None,
+        "ui":      f"http://localhost:{PORT}/",
+    })
+
+
+@app.route("/cancel", methods=["POST", "OPTIONS"])
+@require_key
+def cancel_enhance():
+    """Stop the currently running AI engine process (if any)."""
+    global ACTIVE_PROC
+    with ACTIVE_LOCK:
+        proc = ACTIVE_PROC
+        if proc is None or proc.poll() is not None:
+            return jsonify({"ok": True, "stopped": False, "message": "No active job"})
+        print("[PixelForge] ⏹ Cancel — terminating AI process…", flush=True)
+        proc.terminate()
+        try:
+            proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+        ACTIVE_PROC = None
+    return jsonify({"ok": True, "stopped": True})
 
 
 @app.route("/ping", methods=["GET", "OPTIONS"])
@@ -272,14 +320,6 @@ def enhance():
     except (ValueError, TypeError) as e:
         return jsonify({"error": f"Invalid parameters: {e}"}), 400
 
-    max_kb_raw = request.form.get("max_kb")
-    max_kb = None
-    if max_kb_raw not in (None, ""):
-        try:
-            max_kb = min(int(max_kb_raw), MAX_KB_HARD_LIMIT)
-        except (ValueError, TypeError) as e:
-            return jsonify({"error": f"Invalid max_kb: {e}"}), 400
-
     if scale not in (2, 4):
         return jsonify({"error": "Scale must be 2 or 4"}), 400
 
@@ -303,10 +343,13 @@ def enhance():
 
     try:
         f.save(str(in_path))
-        orig_size_kb = in_path.stat().st_size // 1024
+        input_bytes = in_path.stat().st_size
+        orig_size_kb = input_bytes // 1024
+        max_kb = smart_max_kb(input_bytes)
 
         print(f"\n[{job_id}] 🧠 Job started: {f.filename}")
         print(f"[{job_id}]   Input  : {orig_size_kb} KB")
+        print(f"[{job_id}]   Target : ≤{max_kb} KB (smart cap)")
         print(f"[{job_id}]   Scale  : {scale}×  Model: {model}")
 
         # Verify it's a valid image
@@ -330,29 +373,51 @@ def enhance():
         print(f"[{job_id}] ⏳ Running AI (timeout {PROCESS_TIMEOUT}s)…", flush=True)
         start_time = time.time()
 
+        global ACTIVE_PROC
+        stderr_data = ""
+        stdout_data = ""
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=PROCESS_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            elapsed = time.time() - start_time
-            print(f"[{job_id}] ❌ Timeout after {elapsed:.0f}s")
-            return jsonify({
-                "error": f"Processing timed out after {PROCESS_TIMEOUT}s. Try a smaller image."
-            }), 504
+            with ACTIVE_LOCK:
+                ACTIVE_PROC = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                proc = ACTIVE_PROC
+            try:
+                stdout_data, stderr_data = proc.communicate(timeout=PROCESS_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                elapsed = time.time() - start_time
+                print(f"[{job_id}] ❌ Timeout after {elapsed:.0f}s")
+                return jsonify({
+                    "error": f"Processing timed out after {PROCESS_TIMEOUT}s. Try a smaller image."
+                }), 504
+            finally:
+                with ACTIVE_LOCK:
+                    if ACTIVE_PROC is proc:
+                        ACTIVE_PROC = None
+        except Exception as e:
+            with ACTIVE_LOCK:
+                ACTIVE_PROC = None
+            raise
 
         elapsed = time.time() - start_time
 
-        if result.stderr:
-            print(f"[{job_id}] stderr: {result.stderr[:800]}", flush=True)
-        if result.stdout:
-            print(f"[{job_id}] stdout: {result.stdout[:400]}", flush=True)
+        if stderr_data:
+            print(f"[{job_id}] stderr: {stderr_data[:800]}", flush=True)
+        if stdout_data:
+            print(f"[{job_id}] stdout: {stdout_data[:400]}", flush=True)
+
+        if proc.returncode != 0 and not out_png.exists():
+            err = (stderr_data or "No output produced")[:600]
+            print(f"[{job_id}] ❌ Engine failed: {err}")
+            return jsonify({"error": f"AI enhancement failed: {err}"}), 500
 
         if not out_png.exists():
-            err = (result.stderr or "No output produced")[:600]
+            err = (stderr_data or "No output produced")[:600]
             print(f"[{job_id}] ❌ Engine failed: {err}")
             return jsonify({"error": f"AI enhancement failed: {err}"}), 500
 
@@ -370,27 +435,54 @@ def enhance():
         except Exception as e:
             return jsonify({"error": f"Cannot read enhanced image: {e}"}), 500
 
-        def save_jpg(quality):
-            ai_img.save(str(out_jpg), "JPEG", quality=quality, optimize=True)
+        max_bytes = max_kb * 1024
+        working = ai_img
+        out_w, out_h = working.size
+        quality = 95
+
+        def save_jpg(image, q):
+            image.save(str(out_jpg), "JPEG", quality=q, optimize=True)
             return out_jpg.stat().st_size
 
-        quality = 95
-        size = save_jpg(quality)
+        def best_quality_for(image):
+            nonlocal quality
+            size = save_jpg(image, 95)
+            if size <= max_bytes:
+                quality = 95
+                return size
+            lo, hi, best_q = 50, 94, 50
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                if save_jpg(image, mid) <= max_bytes:
+                    best_q, lo = mid, mid + 1
+                else:
+                    hi = mid - 1
+            save_jpg(image, best_q)
+            quality = best_q
+            return out_jpg.stat().st_size
 
-        if max_kb is not None:
-            max_bytes = max_kb * 1024
-            if size > max_bytes:
-                print(f"[{job_id}] ⚙️  Optimising size ({size//1024}KB → target {max_kb}KB)…")
-                lo, hi, best = 50, 94, 50
-                while lo <= hi:
-                    mid = (lo + hi) // 2
-                    if save_jpg(mid) <= max_bytes:
-                        best, lo = mid, mid + 1
-                    else:
-                        hi = mid - 1
-                save_jpg(best)
-                quality = best
+        size = best_quality_for(working)
+        if size > max_bytes:
+            print(f"[{job_id}] ⚙️  Over {max_kb}KB at q={quality} — scaling down…", flush=True)
+            for pct in range(90, 35, -5):
+                nw = max(64, int(out_w * pct / 100))
+                nh = max(64, int(out_h * pct / 100))
+                if nw >= out_w and nh >= out_h:
+                    continue
+                if working is not ai_img:
+                    working.close()
+                working = ai_img.resize((nw, nh), Image.LANCZOS)
+                out_w, out_h = nw, nh
+                size = best_quality_for(working)
+                if size <= max_bytes:
+                    break
 
+        if size > max_bytes:
+            save_jpg(working, 50)
+            quality = 50
+
+        if working is not ai_img:
+            working.close()
         ai_img.close()
         out_size_kb = out_jpg.stat().st_size // 1024
         out_name    = "AI_" + Path(f.filename).stem + ".jpg"
@@ -488,7 +580,7 @@ if __name__ == "__main__":
         local_ip = "localhost"
 
     print(f"\n  📍 API      → http://localhost:{PORT}")
-    print(f"  🖼️  Frontend → http://localhost:{PORT}/ui   ← open this in browser")
+    print(f"  🖼️  Frontend → http://localhost:{PORT}/   ← open this in browser")
     print(f"  📍 Network  → http://{local_ip}:{PORT}")
     print(f"  🔑 API Key  → {API_KEY}")
     print("=" * 70 + "\n")

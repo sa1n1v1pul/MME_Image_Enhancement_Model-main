@@ -842,6 +842,11 @@
     margin-bottom: 10px;
     word-break: break-word;
   }
+  .card-meta.out-ready {
+    color: var(--green);
+    font-weight: 600;
+  }
+  .card-meta .in-label { opacity: 0.75; }
 
   .card-actions {
     display: grid;
@@ -1124,7 +1129,7 @@
   </header>
 
   <div id="corsWarning">
-    Open via <strong>http://localhost:5000/ui</strong> after running <code>python server.py</code>
+    Open via <strong>http://localhost:5000</strong> after running <code>python server.py</code>
   </div>
 
   <div class="workspace">
@@ -1211,7 +1216,6 @@
           <svg width="34" height="34" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke-width="2.5"/></svg>
         </div>
         <h2>Drop images or click to browse</h2>
-        <p>4× AI upscale · Custom W×H · Smart file size from 50 KB</p>
         <div class="fmt-tags">
           <span>JPG</span><span>PNG</span><span>WEBP</span><span>BMP</span><span>TIFF</span>
         </div>
@@ -1298,6 +1302,13 @@
 <script>
 const API_KEY  = 'pixelforge-secret-2024';
 const AI_MODEL = 'realesrgan-x4plus';
+const MAX_OUTPUT_KB_CAP = 2048;   // 2 MB ceiling
+const OUTPUT_SIZE_MULT = 7;       // ~7× input (5 KB→35 KB, 10 KB→70 KB, …)
+
+function getMaxOutputKbForFile(fileBytes) {
+  const inputKb = Math.max(1, Math.ceil(fileBytes / 1024));
+  return Math.min(MAX_OUTPUT_KB_CAP, inputKb * OUTPUT_SIZE_MULT);
+}
 
 function getApiBase() {
   if (window.location.protocol !== 'file:' && window.location.host) {
@@ -1314,6 +1325,7 @@ let globalDefaults = null;
 let selectedEditId = null;
 let isProcessing = false;
 let cancelRequested = false;
+let activeBatchAbort = null;
 let isOnline = false;
 let currentFilter = 'all';
 let stats = { total: 0, done: 0, fail: 0 };
@@ -1489,9 +1501,36 @@ function syncUnlockedQueueItems(s) {
 }
 
 function planSummary(s) {
-  if (s.native) return '4× upscale · model output';
+  if (s.native) return '4× upscale';
   if (!s.w || !s.h) return 'Set width & height';
   return `${s.w}×${s.h} px`;
+}
+
+function formatOutputSize(bytes) {
+  if (!bytes || bytes < 1) return '0 KB';
+  const kb = bytes / 1024;
+  if (kb < 1024) return (kb < 100 ? kb.toFixed(1) : Math.round(kb)) + ' KB';
+  return (kb / 1024).toFixed(2) + ' MB';
+}
+
+function cardPlanLine(item) {
+  if (item.status === 'done' && item.outDims) {
+    return `Out ${item.outDims}${String(item.outDims).includes('×') ? '' : ' px'}`;
+  }
+  if (item.status === 'processing' && item.msg) return item.msg;
+  if (item.status === 'error' && item.msg) return item.msg;
+  if (item.settings) return planSummary(item.settings);
+  return item.msg || '';
+}
+
+function cardMetaLine(item) {
+  if (item.status === 'done' && item.outBytes != null) {
+    return `${formatOutputSize(item.outBytes)} ready to download`;
+  }
+  const inParts = [];
+  if (item.origDims) inParts.push(`${item.origDims} px in`);
+  inParts.push(`${(item.file.size / 1024).toFixed(0)} KB in`);
+  return inParts.join(' · ');
 }
 
 function updateAspectLabel() {
@@ -1715,7 +1754,7 @@ function validateItemSettings(s, fileName) {
 }
 
 function getOutputTargetFromSettings(s) {
-  if (s.native) return null;
+  if (!s || s.native) return null;
   return { id: s.formatId, w: s.w, h: s.h };
 }
 
@@ -1916,8 +1955,8 @@ function renderGallery() {
       ${showProgress ? '<div class="card-progress"><div class="bar indet"></div></div>' : ''}
       <div class="card-body">
         <div class="card-name" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</div>
-        <div class="card-plan">${escapeHtml(item.settings ? planSummary(item.settings) : item.msg)}</div>
-        <div class="card-meta">${item.origDims ? item.origDims + ' px in · ' : ''}${(item.file.size/1024).toFixed(0)} KB</div>
+        <div class="card-plan">${escapeHtml(cardPlanLine(item))}</div>
+        <div class="card-meta${item.status === 'done' ? ' out-ready' : ''}">${escapeHtml(cardMetaLine(item))}</div>
         <div class="card-actions">${actions}</div>
       </div>`;
 
@@ -1961,11 +2000,15 @@ function updateButtons() {
   const retryBtn = document.getElementById('retryBtn');
   const cancelBtn = document.getElementById('cancelBtn');
 
-  const hasWait = queue.some(i => i.status === 'wait');
+  const waitCount = queue.filter(i => i.status === 'wait').length;
+  const hasWait = waitCount > 0;
   const hasDone = queue.some(i => i.status === 'done' && i.blob);
   const hasFail = queue.some(i => i.status === 'error');
 
-  if (processBtn) processBtn.disabled = !isOnline || !hasWait || isProcessing;
+  if (processBtn) {
+    processBtn.disabled = !isOnline || !hasWait || isProcessing;
+    processBtn.textContent = waitCount === 1 ? 'Enhance' : 'Enhance all';
+  }
   if (saveBtn) saveBtn.disabled = !hasDone || isProcessing;
   if (retryBtn) retryBtn.disabled = !hasFail || isProcessing;
   if (cancelBtn) cancelBtn.style.display = isProcessing ? 'inline-flex' : 'none';
@@ -2023,10 +2066,34 @@ function retryFailed() {
   processQueue();
 }
 
-function cancelBatch() {
+async function cancelBatch() {
+  if (!isProcessing) return;
+  if (cancelRequested) return;
   cancelRequested = true;
-  log('Cancel requested…', 'warn');
-  toast('Finishing current image, then stopping', 'info');
+  log('Cancelling…', 'warn');
+  toast('Cancelling…', 'info');
+
+  if (activeBatchAbort) {
+    try { activeBatchAbort.abort(); } catch (e) {}
+  }
+
+  try {
+    await fetch(`${getApiBase()}/cancel`, {
+      method: 'POST',
+      headers: { 'X-API-Key': API_KEY },
+    });
+  } catch (e) {
+    log('Server cancel signal failed (fetch aborted)', 'warn');
+  }
+
+  queue.forEach(item => {
+    if (item.status === 'processing') {
+      item.status = 'wait';
+      item.msg = 'Queued';
+    }
+  });
+  renderGallery();
+  updateStats();
 }
 
 // ─── PROCESS ────────────────────────────────────────────────────
@@ -2048,6 +2115,79 @@ async function resizeBlobToTarget(blob, targetW, targetH) {
     img.onerror = () => { URL.revokeObjectURL(tmpUrl); reject(new Error('Load failed')); };
     img.src = tmpUrl;
   });
+}
+
+function canvasToJpeg(img, quality) {
+  return new Promise((resolve, reject) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('Encode failed')), 'image/jpeg', quality / 100);
+  });
+}
+
+async function compressToMaxKb(blob, maxKb) {
+  const maxBytes = maxKb * 1024;
+  if (blob.size <= maxBytes) return blob;
+
+  const loadImage = url => new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = rej;
+    im.src = url;
+  });
+
+  const encodeBest = async (img) => {
+    let lo = 40, hi = 92, bestQ = 40;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const trial = await canvasToJpeg(img, mid);
+      if (trial.size <= maxBytes) { bestQ = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    let out = await canvasToJpeg(img, bestQ);
+    if (out.size > maxBytes) out = await canvasToJpeg(img, 40);
+    return out;
+  };
+
+  const resizeScale = (img, scale) => {
+    const w = Math.max(64, Math.round(img.naturalWidth * scale));
+    const h = Math.max(64, Math.round(img.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, w, h);
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(b => b ? resolve({ blob: b, w, h }) : reject(new Error('Resize failed')), 'image/jpeg', 0.92);
+    });
+  };
+
+  let tmpUrl = URL.createObjectURL(blob);
+  try {
+    let img = await loadImage(tmpUrl);
+    URL.revokeObjectURL(tmpUrl);
+    tmpUrl = null;
+
+    let out = await encodeBest(img);
+    if (out.size <= maxBytes) return out;
+
+    for (const scale of [0.9, 0.8, 0.7, 0.6, 0.5, 0.42]) {
+      const { blob: scaled, w, h } = await resizeScale(img, scale);
+      const trialUrl = URL.createObjectURL(scaled);
+      const scaledImg = await loadImage(trialUrl);
+      URL.revokeObjectURL(trialUrl);
+      out = await encodeBest(scaledImg);
+      if (out.size <= maxBytes) return out;
+    }
+
+    return out;
+  } finally {
+    if (tmpUrl) URL.revokeObjectURL(tmpUrl);
+  }
 }
 
 function getOutputFilename(item) {
@@ -2090,8 +2230,13 @@ async function processQueue() {
 
   let successCount = 0;
 
+  let wasCancelled = false;
+
   for (const item of pending) {
-    if (cancelRequested) break;
+    if (cancelRequested) {
+      wasCancelled = true;
+      break;
+    }
 
     batchCurrent++;
     updateBatchUI(batchCurrent, batchTotal, item.file.name.slice(0, 20));
@@ -2100,14 +2245,18 @@ async function processQueue() {
     item.msg = 'Sending…';
     renderGallery();
 
+    activeBatchAbort = new AbortController();
+    const controller = activeBatchAbort;
+    const tid = setTimeout(() => controller.abort(), 30 * 60 * 1000);
+
     try {
+      const s = item.settings;
       const fd = new FormData();
       fd.append('image', item.file);
       fd.append('scale', '4');
+      const maxKb = getMaxOutputKbForFile(item.file.size);
+      fd.append('max_kb', String(maxKb));
       fd.append('model', AI_MODEL);
-
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 30 * 60 * 1000);
 
       item.msg = 'AI processing…';
       renderGallery();
@@ -2119,6 +2268,13 @@ async function processQueue() {
         signal: controller.signal
       });
       clearTimeout(tid);
+
+      if (cancelRequested) {
+        wasCancelled = true;
+        item.status = 'wait';
+        item.msg = 'Queued';
+        break;
+      }
 
       if (!response.ok) {
         let errText = `HTTP ${response.status}`;
@@ -2132,7 +2288,7 @@ async function processQueue() {
       let finalDims = aiDims;
 
       const target = getOutputTargetFromSettings(s);
-      if (target) {
+      if (target && !cancelRequested) {
         item.msg = `Resize ${target.w}×${target.h}`;
         renderGallery();
         try {
@@ -2143,16 +2299,49 @@ async function processQueue() {
         }
       }
 
+      if (cancelRequested) {
+        wasCancelled = true;
+        item.status = 'wait';
+        item.msg = 'Queued';
+        break;
+      }
+
+      if (finalBlob.size > maxKb * 1024) {
+        item.msg = `Compressing to ≤${formatOutputSize(maxKb * 1024)}…`;
+        renderGallery();
+        finalBlob = await compressToMaxKb(finalBlob, maxKb);
+      }
+
+      if (cancelRequested) {
+        wasCancelled = true;
+        item.status = 'wait';
+        item.msg = 'Queued';
+        break;
+      }
+
       if (item.blob) URL.revokeObjectURL(item.blob);
       item.blob = URL.createObjectURL(finalBlob);
       item.status = 'done';
-      item.msg = `${finalDims} · ${Math.round(finalBlob.size/1024)} KB`;
+      item.outDims = finalDims;
+      item.outBytes = finalBlob.size;
+      item.outSizeKb = Math.round(finalBlob.size / 1024);
+      item.msg = `${finalDims} · ${formatOutputSize(finalBlob.size)}`;
       successCount++;
-      log(`Done: ${item.file.name}`, 'ok');
+      log(`Done: ${item.file.name} — ${item.msg}`, 'ok');
     } catch (err) {
+      clearTimeout(tid);
+      if (cancelRequested || err.name === 'AbortError') {
+        wasCancelled = true;
+        item.status = 'wait';
+        item.msg = 'Queued';
+        log(`Cancelled: ${item.file.name}`, 'warn');
+        break;
+      }
       item.status = 'error';
-      item.msg = err.name === 'AbortError' ? 'Timeout' : err.message;
+      item.msg = err.message;
       log(`Failed: ${item.file.name} — ${item.msg}`, 'error');
+    } finally {
+      activeBatchAbort = null;
     }
 
     renderGallery();
@@ -2161,16 +2350,17 @@ async function processQueue() {
 
   isProcessing = false;
   cancelRequested = false;
+  activeBatchAbort = null;
   updateBatchUI(0, 0);
   updateButtons();
 
-  if (successCount > 0) bumpLifetime(successCount);
+  if (successCount > 0 && !wasCancelled) bumpLifetime(successCount);
 
-  const msg = cancelRequested
-    ? `Stopped — ${successCount} enhanced`
+  const msg = wasCancelled
+    ? `Cancelled — ${successCount} completed before stop`
     : `Complete — ${stats.done} done, ${stats.fail} failed`;
-  toast(msg, stats.fail > 0 && !cancelRequested ? 'err' : 'ok');
-  log(msg, stats.fail > 0 ? 'warn' : 'ok');
+  toast(msg, wasCancelled ? 'info' : (stats.fail > 0 ? 'err' : 'ok'));
+  log(msg, wasCancelled ? 'warn' : (stats.fail > 0 ? 'warn' : 'ok'));
 }
 
 // ─── SAVE ALL ───────────────────────────────────────────────────
