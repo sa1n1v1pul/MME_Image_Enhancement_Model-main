@@ -40,7 +40,7 @@ API_KEY           = "pixelforge-secret-2024"
 HOST              = "0.0.0.0"
 PORT              = 5000
 MAX_KB_HARD_LIMIT = 10000
-MAX_OUTPUT_KB     = 2048   # 2 MB hard ceiling
+MAX_OUTPUT_KB     = 3072   # 3 MB hard ceiling
 OUTPUT_SIZE_MULT  = 7      # ~7× input size (5 KB → ~35 KB, 10 KB → ~70 KB, …)
 PROCESS_TIMEOUT   = 3600   # 60 minutes
 
