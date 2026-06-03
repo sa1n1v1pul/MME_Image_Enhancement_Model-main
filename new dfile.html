@@ -143,6 +143,101 @@
 
   #themeToggle { cursor: pointer; border: none; font-family: inherit; }
 
+  .mode-switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--glass);
+    backdrop-filter: var(--blur);
+  }
+  .mode-switch-hint {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+  .mode-switch-hint.active { color: var(--accent); }
+  .toggle-pill {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--input-bg);
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.2s, border-color 0.2s;
+  }
+  .toggle-pill[aria-checked="true"] {
+    background: rgba(0, 229, 255, 0.2);
+    border-color: var(--accent);
+  }
+  .toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--accent-grad);
+    box-shadow: 0 2px 8px var(--border-glow);
+    transition: transform 0.2s;
+  }
+  .toggle-pill[aria-checked="true"] .toggle-thumb {
+    transform: translateX(20px);
+  }
+  .panel-body.mode-folder-locked .format-cards,
+  .panel-body.mode-folder-locked .dim-editor {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .panel-body.mode-folder-locked .format-card { cursor: default; }
+
+  body.batch-processing .mode-switch,
+  body.batch-processing #themeToggle {
+    pointer-events: none;
+    opacity: 0.45;
+  }
+  body.batch-processing .drop-hero {
+    pointer-events: none;
+    opacity: 0.55;
+  }
+  body.batch-processing .filter-tabs,
+  body.batch-processing .toolbar-actions .btn:not(#cancelBtn),
+  body.batch-processing .log-actions button {
+    pointer-events: none;
+    opacity: 0.45;
+  }
+  body.batch-processing .card.wait .card-actions .mini:not(.danger),
+  body.batch-processing .card.processing .card-actions .mini:not(.danger),
+  body.batch-processing .card.error .card-actions .mini:not(.danger) {
+    pointer-events: none;
+    opacity: 0.4;
+  }
+  .folder-hint {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--input-bg);
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .card-college {
+    font-size: 0.6rem;
+    color: var(--accent);
+    font-family: 'IBM Plex Mono', monospace;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   html { scroll-behavior: smooth; }
 
   body {
@@ -1083,7 +1178,7 @@
   #corsWarning.show { display: block; }
 </style>
 </head>
-<body data-theme="dark">
+<body data-theme="light">
 
 <div class="aurora"><span class="o1"></span><span class="o2"></span><span class="o3"></span></div>
 <div class="grid-overlay"></div>
@@ -1118,8 +1213,14 @@
     </div>
 
     <div class="topbar-actions">
+      <div class="mode-switch" title="Folder mode = college folders · Image mode = single uploads">
+        <span class="mode-switch-hint active" id="modeLabelFolder">Folder</span>
+        <button type="button" class="toggle-pill" id="imageModeToggle" role="switch"
+          aria-checked="false" onclick="toggleUploadMode()" aria-label="Image upload mode"></button>
+        <span class="mode-switch-hint" id="modeLabelImages">Images</span>
+      </div>
       <button class="icon-3d purple sm" id="themeToggle" onclick="toggleTheme()" title="Light / Dark" type="button">
-        <span class="glyph" id="themeIcon">🌙</span>
+        <span class="glyph" id="themeIcon">☀️</span>
       </button>
       <div class="status-chip" id="statusChip">
         <span class="dot"></span>
@@ -1136,7 +1237,10 @@
     <!-- Settings -->
     <aside class="glass-panel">
       <div class="panel-title">Output Settings</div>
-      <div class="panel-body">
+      <div class="panel-body mode-folder-locked" id="settingsPanel">
+        <div class="folder-hint" id="folderHint">
+          Folder mode: <strong>logo</strong> 512×512 · <strong>banner</strong> 1200×400 · <strong>gallery</strong> 1024×768 (auto per subfolder).
+        </div>
         <div class="edit-banner" id="editBanner" style="display:none">
           <span id="editBannerText">Editing 1 image</span>
           <button type="button" onclick="clearEditSelection()" title="Back to defaults">✕</button>
@@ -1144,7 +1248,7 @@
         <div class="panel-title" style="border:none;padding:0 0 0.75rem;margin:0">Dimensions (px)</div>
         <div class="format-cards" id="formatCards">
           <div class="format-grid">
-            <button type="button" class="format-card active" data-w="1200" data-h="400" data-id="banner" onclick="setOutputType(this)">
+            <button type="button" class="format-card" data-w="1200" data-h="400" data-id="banner" onclick="setOutputType(this)">
               <div class="icon-3d cyan sm"><svg width="20" height="20" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/></svg></div>
               <div><strong>Banner</strong><span>Preset</span></div>
             </button>
@@ -1156,7 +1260,7 @@
               <div class="icon-3d violet sm"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M12 2l8 10-8 10-8-10z"/></svg></div>
               <div><strong>Logo</strong><span>Preset</span></div>
             </button>
-            <button type="button" class="format-card" data-w="" data-h="" data-id="original" onclick="setOutputType(this)">
+            <button type="button" class="format-card active" data-w="" data-h="" data-id="original" onclick="setOutputType(this)">
               <div class="icon-3d gold sm"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/></svg></div>
               <div><strong>Native 4×</strong><span>No resize</span></div>
             </button>
@@ -1212,15 +1316,19 @@
       </div>
 
       <div class="drop-hero" id="dropZone">
-        <div class="drop-visual icon-3d cyan lg">
-          <svg width="34" height="34" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke-width="2.5"/></svg>
+        <div class="drop-visual icon-3d cyan lg" id="dropIcon">
+          <svg width="34" height="34" viewBox="0 0 24 24" id="dropIconSvg"><path d="M4 7h13l3 3v11H4z" stroke-width="2.2" fill="none"/><path d="M4 7V4h10l3 3" stroke-width="2.2" fill="none"/></svg>
         </div>
-        <h2>Drop images or click to browse</h2>
+        <h2 id="dropTitle">Upload folder structure</h2>
+        <p id="dropSub" style="font-size:0.78rem;color:var(--text-secondary);margin:0 0 10px;max-width:420px;line-height:1.45">
+          College → logo / banner / gallery subfolders. Presets apply automatically.
+        </p>
         <div class="fmt-tags">
           <span>JPG</span><span>PNG</span><span>WEBP</span><span>BMP</span><span>TIFF</span>
         </div>
       </div>
-      <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png,.bmp,.webp,.tiff,.tif"/>
+      <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png,.bmp,.webp,.tiff,.tif" style="display:none"/>
+      <input type="file" id="folderInput" webkitdirectory directory multiple style="display:none"/>
 
       <div class="toolbar">
         <div class="filter-tabs" id="filterTabs">
@@ -1302,8 +1410,17 @@
 <script>
 const API_KEY  = 'pixelforge-secret-2024';
 const AI_MODEL = 'realesrgan-x4plus';
-const MAX_OUTPUT_KB_CAP = 2048;   // 2 MB ceiling
+const MAX_OUTPUT_KB_CAP = 3072;   // 3 MB ceiling
 const OUTPUT_SIZE_MULT = 7;       // ~7× input (5 KB→35 KB, 10 KB→70 KB, …)
+
+const FOLDER_TYPE_PRESETS = {
+  logo:    { native: false, formatId: 'logo',    w: 512,  h: 512 },
+  banner:  { native: false, formatId: 'banner',  w: 1200, h: 400 },
+  gallery: { native: false, formatId: 'gallery', w: 1024, h: 768 },
+};
+
+let uploadMode = 'folder'; // 'folder' (default) | 'image'
+let batchFolderRoot = '';
 
 function getMaxOutputKbForFile(fileBytes) {
   const inputKb = Math.max(1, Math.ceil(fileBytes / 1024));
@@ -1333,6 +1450,95 @@ let toastTimer = null;
 let batchTotal = 0;
 let batchCurrent = 0;
 
+function isImageMode() { return uploadMode === 'image'; }
+
+function settingsForFolderType(typeKey) {
+  const base = FOLDER_TYPE_PRESETS[typeKey] || FOLDER_TYPE_PRESETS.banner;
+  return cloneSettings(base);
+}
+
+function detectFolderType(folderName) {
+  const n = folderName.toLowerCase().trim();
+  if (n === 'logo' || n === 'logos') return 'logo';
+  if (n === 'banner' || n === 'banners') return 'banner';
+  if (n === 'gallery' || n === 'galleries') return 'gallery';
+  return null;
+}
+
+function parseFolderFile(file) {
+  const rel = (file.webkitRelativePath || file.name || '').replace(/\\/g, '/');
+  const parts = rel.split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  const fileName = parts[parts.length - 1];
+  if (!SUPPORTED_EXT.test(fileName) && !SUPPORTED_TYPES.includes(file.type)) return null;
+
+  let typeIdx = -1;
+  let typeKey = null;
+  for (let i = parts.length - 2; i >= 0; i--) {
+    typeKey = detectFolderType(parts[i]);
+    if (typeKey) { typeIdx = i; break; }
+  }
+  if (!typeKey || typeIdx < 0) return null;
+
+  const zipDir = parts.slice(0, -1).join('/');
+  const collegePath = parts.slice(0, typeIdx).join('/') || parts[typeIdx - 1] || 'root';
+  return { rel, zipDir, collegePath, typeKey, fileName };
+}
+
+function setFormatCardActiveDisplay(formatId) {
+  document.querySelectorAll('.format-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.id === formatId);
+  });
+}
+
+function applyUploadModeUI() {
+  const toggle = document.getElementById('imageModeToggle');
+  const lblFolder = document.getElementById('modeLabelFolder');
+  const lblImages = document.getElementById('modeLabelImages');
+  const panel = document.getElementById('settingsPanel');
+  const hint = document.getElementById('folderHint');
+  const title = document.getElementById('dropTitle');
+  const sub = document.getElementById('dropSub');
+  const iconSvg = document.getElementById('dropIconSvg');
+
+  const imageOn = isImageMode();
+  if (toggle) toggle.setAttribute('aria-checked', imageOn ? 'true' : 'false');
+  lblFolder?.classList.toggle('active', !imageOn);
+  lblImages?.classList.toggle('active', imageOn);
+  panel?.classList.toggle('mode-folder-locked', !imageOn);
+  if (hint) hint.style.display = imageOn ? 'none' : 'block';
+
+  if (title) title.textContent = imageOn ? 'Drop images or click to browse' : 'Upload folder structure';
+  if (sub) {
+    sub.style.display = imageOn ? 'none' : 'block';
+    sub.textContent = imageOn ? '' : 'Pick root folder (e.g. barat) with college → logo / banner / gallery inside.';
+  }
+  if (iconSvg && !imageOn) {
+    iconSvg.innerHTML = '<path d="M4 7h13l3 3v11H4z" stroke-width="2.2" fill="none"/><path d="M4 7V4h10l3 3" stroke-width="2.2" fill="none"/>';
+  } else if (iconSvg && imageOn) {
+    iconSvg.innerHTML = '<path d="M12 5v14M5 12h14" stroke-width="2.5"/>';
+  }
+
+  if (!imageOn) {
+    setFormatCardActiveDisplay('original');
+    toggleDimEditor(false);
+  } else if (globalDefaults) {
+    loadSettingsToUI(globalDefaults);
+  } else {
+    setFormatCardActiveDisplay('banner');
+  }
+
+  updateButtons();
+}
+
+function toggleUploadMode() {
+  if (isProcessing) return;
+  uploadMode = isImageMode() ? 'folder' : 'image';
+  applyUploadModeUI();
+  log(uploadMode === 'image' ? 'Image upload mode' : 'Folder upload mode', 'info');
+  toast(uploadMode === 'image' ? 'Image mode — paste & drop images' : 'Folder mode — upload college folders', 'info');
+}
+
 // ─── INIT ───────────────────────────────────────────────────────
 function initializeApp() {
   if (window.location.protocol === 'file:') {
@@ -1342,8 +1548,11 @@ function initializeApp() {
   setupDimensions();
   setupFilters();
   setupCompareSlider();
+  applyUploadModeUI();
   applyTheme(getPreferredTheme());
-  globalDefaults = captureSettingsFromUI();
+  globalDefaults = isImageMode()
+    ? captureSettingsFromUI()
+    : cloneSettings({ native: false, formatId: 'banner', w: 1200, h: 400 });
   updateSessionBadge();
   renderGallery();
   log('Studio initialized', 'info');
@@ -1773,7 +1982,7 @@ function setupFilters() {
 function getPreferredTheme() {
   const saved = safeStorage('get', 'theme');
   if (saved === 'light' || saved === 'dark') return saved;
-  return 'dark';
+  return 'light';
 }
 
 function applyTheme(theme) {
@@ -1790,17 +1999,62 @@ function toggleTheme() {
 }
 
 // ─── FILES ──────────────────────────────────────────────────────
+async function readEntryRecursive(entry, base = '') {
+  if (entry.isFile) {
+    return new Promise(resolve => {
+      entry.file(file => {
+        const rel = (base + file.name).replace(/\\/g, '/');
+        try { Object.defineProperty(file, 'webkitRelativePath', { value: rel, configurable: true }); } catch (e) {}
+        resolve([file]);
+      }, () => resolve([]));
+    });
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    const all = [];
+    const readBatch = () => new Promise(res => reader.readEntries(res));
+    let entries = await readBatch();
+    while (entries.length) {
+      for (const ent of entries) {
+        all.push(...await readEntryRecursive(ent, base + entry.name + '/'));
+      }
+      entries = await readBatch();
+    }
+    return all;
+  }
+  return [];
+}
+
+async function filesFromDataTransfer(dt) {
+  const items = [...(dt.items || [])];
+  if (items.length && items[0].webkitGetAsEntry) {
+    let out = [];
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry();
+      if (entry) out = out.concat(await readEntryRecursive(entry));
+    }
+    if (out.length) return out;
+  }
+  return [...(dt.files || [])];
+}
+
 function setupEventListeners() {
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
+  const folderInput = document.getElementById('folderInput');
 
-  dropZone?.addEventListener('click', () => fileInput?.click());
+  dropZone?.addEventListener('click', () => {
+    if (isImageMode()) fileInput?.click();
+    else folderInput?.click();
+  });
   dropZone?.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
   dropZone?.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-  dropZone?.addEventListener('drop', e => {
+  dropZone?.addEventListener('drop', async e => {
     e.preventDefault();
     dropZone.classList.remove('dragover');
-    addFiles([...e.dataTransfer.files]);
+    const files = await filesFromDataTransfer(e.dataTransfer);
+    if (isImageMode()) addFiles(files);
+    else addFolderFiles(files);
   });
 
   fileInput?.addEventListener('change', e => {
@@ -1808,7 +2062,13 @@ function setupEventListeners() {
     e.target.value = '';
   });
 
+  folderInput?.addEventListener('change', e => {
+    addFolderFiles([...e.target.files]);
+    e.target.value = '';
+  });
+
   document.addEventListener('paste', e => {
+    if (!isImageMode()) return;
     const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
     if (files.length) { e.preventDefault(); addFiles(files); }
   });
@@ -1885,6 +2145,82 @@ function addFiles(files) {
   toast(`Added ${valid.length} image(s)`, 'ok');
 }
 
+function addFolderFiles(files) {
+  const parsed = [];
+  let rootName = '';
+
+  for (const f of files) {
+    const info = parseFolderFile(f);
+    if (!info) continue;
+    parsed.push({ file: f, ...info });
+    const top = info.rel.split('/')[0];
+    if (top) rootName = rootName || top;
+  }
+
+  if (!parsed.length) {
+    toast('No images in logo / banner / gallery folders', 'err');
+    log('Folder scan: no matching paths (need …/logo|banner|gallery/…)', 'warn');
+    return;
+  }
+
+  if (rootName) batchFolderRoot = rootName;
+  const dedupe = new Set(queue.map(i => (i.zipDir || '') + '|' + i.file.name + i.file.size));
+  let added = 0;
+  let skipped = 0;
+
+  parsed.forEach(info => {
+    const key = info.zipDir + '|' + info.file.name + info.file.size;
+    if (dedupe.has(key)) { skipped++; return; }
+    dedupe.add(key);
+
+    const defs = settingsForFolderType(info.typeKey);
+    const item = {
+      id: Date.now() + Math.random(),
+      file: info.file,
+      status: 'wait',
+      blob: null,
+      thumbUrl: '',
+      origDims: '',
+      settings: defs,
+      settingsLocked: true,
+      folderType: info.typeKey,
+      collegePath: info.collegePath,
+      zipDir: info.zipDir,
+      msg: `${info.typeKey} · ${planSummary(defs)}`
+    };
+    queue.push(item);
+    added++;
+
+    loadImageMeta(info.file).then(meta => {
+      if (meta) {
+        item.origDims = `${meta.w}×${meta.h}`;
+        item.origW = meta.w;
+        item.origH = meta.h;
+      }
+    });
+
+    const reader = new FileReader();
+    reader.onload = e => {
+      item.thumbUrl = e.target.result;
+      renderGallery();
+    };
+    reader.readAsDataURL(info.file);
+
+    log(`Added ${info.zipDir}/${info.fileName} → ${info.typeKey} ${defs.w}×${defs.h}`, 'info');
+  });
+
+  renderGallery();
+  updateStats();
+  toast(`Folder: ${added} image(s) queued`, 'ok');
+  if (skipped) log(`Skipped ${skipped} duplicate(s)`, 'warn');
+}
+
+function getZipEntryPath(item) {
+  const name = getOutputFilename(item);
+  if (item.zipDir) return `${item.zipDir}/${name}`.replace(/\/+/g, '/');
+  return name;
+}
+
 function getFilteredQueue() {
   if (currentFilter === 'all') return queue;
   return queue.filter(i => i.status === currentFilter);
@@ -1898,7 +2234,10 @@ function renderGallery() {
   const items = getFilteredQueue();
 
   if (queue.length === 0) {
-    gallery.innerHTML = `<div class="empty-gallery"><div class="big">◇</div><p>No images yet — drop files or paste with Ctrl+V</p></div>`;
+    const hint = isImageMode()
+      ? 'No images yet — drop files or paste with Ctrl+V'
+      : 'No images yet — upload a folder with logo / banner / gallery inside each college';
+    gallery.innerHTML = `<div class="empty-gallery"><div class="big">◇</div><p>${hint}</p></div>`;
     updateButtons();
     return;
   }
@@ -1915,7 +2254,7 @@ function renderGallery() {
     const card = document.createElement('article');
     card.className = `card ${item.status}` + (selectedEditId === item.id ? ' selected-edit' : '');
     card.id = `card-${item.id}`;
-    if (item.status === 'wait') {
+    if (item.status === 'wait' && isImageMode()) {
       card.style.cursor = 'pointer';
       card.onclick = e => {
         if (e.target.closest('button, a')) return;
@@ -1954,6 +2293,7 @@ function renderGallery() {
       </div>
       ${showProgress ? '<div class="card-progress"><div class="bar indet"></div></div>' : ''}
       <div class="card-body">
+        ${item.collegePath && !isImageMode() ? `<div class="card-college" title="${escapeHtml(item.zipDir || '')}">${escapeHtml(item.collegePath)} / ${escapeHtml(item.folderType || '')}</div>` : ''}
         <div class="card-name" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</div>
         <div class="card-plan">${escapeHtml(cardPlanLine(item))}</div>
         <div class="card-meta${item.status === 'done' ? ' out-ready' : ''}">${escapeHtml(cardMetaLine(item))}</div>
@@ -1999,6 +2339,7 @@ function updateButtons() {
   const saveBtn = document.getElementById('saveAllBtn');
   const retryBtn = document.getElementById('retryBtn');
   const cancelBtn = document.getElementById('cancelBtn');
+  const toggle = document.getElementById('imageModeToggle');
 
   const waitCount = queue.filter(i => i.status === 'wait').length;
   const hasWait = waitCount > 0;
@@ -2009,9 +2350,15 @@ function updateButtons() {
     processBtn.disabled = !isOnline || !hasWait || isProcessing;
     processBtn.textContent = waitCount === 1 ? 'Enhance' : 'Enhance all';
   }
-  if (saveBtn) saveBtn.disabled = !hasDone || isProcessing;
+  if (saveBtn) {
+    saveBtn.disabled = !hasDone;
+    saveBtn.textContent = isImageMode() ? 'Save all ZIP' : 'Download folder ZIP';
+  }
   if (retryBtn) retryBtn.disabled = !hasFail || isProcessing;
   if (cancelBtn) cancelBtn.style.display = isProcessing ? 'inline-flex' : 'none';
+
+  document.body.classList.toggle('batch-processing', isProcessing);
+  if (toggle) toggle.disabled = isProcessing;
 }
 
 function removeItem(id) {
@@ -2375,12 +2722,13 @@ async function saveAll() {
     const zip = new JSZip();
     for (const item of done) {
       const blob = await fetch(item.blob).then(r => r.blob());
-      zip.file(getOutputFilename(item), blob);
+      zip.file(getZipEntryPath(item), blob);
     }
     const content = await zip.generateAsync({ type: 'blob' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(content);
-    a.download = `PixelForge_${new Date().toISOString().slice(0, 10)}.zip`;
+    const zipLabel = batchFolderRoot || (isImageMode() ? 'PixelForge' : 'colleges');
+    a.download = `${zipLabel}_${new Date().toISOString().slice(0, 10)}.zip`;
     a.click();
     URL.revokeObjectURL(a.href);
     toast(`ZIP: ${done.length} images`, 'ok');
@@ -2388,7 +2736,7 @@ async function saveAll() {
   } catch (e) {
     toast('ZIP failed', 'err');
   } finally {
-    if (btn) { btn.textContent = 'Save all ZIP'; updateButtons(); }
+    if (btn) updateButtons();
   }
 }
 
